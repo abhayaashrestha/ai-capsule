@@ -1,0 +1,314 @@
+# AI Capsule
+
+A private prompt library. Sign in with GitHub, save the AI prompts that worked
+for you, and find them again later. Each record stores the prompt with its
+project, version, category, usefulness, review status, notes and an optional
+screenshot URL.
+
+## Deployed application
+
+| | |
+| --- | --- |
+| Public URL | https://YOUR-APP-NAME.azurewebsites.net |
+| Health check | https://YOUR-APP-NAME.azurewebsites.net/api/health |
+| Cloud platform | Microsoft Azure App Service — Linux, Node 22 LTS, Free F1 plan |
+| Deployment | GitHub Actions via Azure Deployment Center, on every push to `main` |
+
+The free plan sleeps when idle, so the first request after a pause can take
+up to about 30 seconds.
+
+## Technology
+
+| Layer | Choice |
+| --- | --- |
+| Frontend | React 19, React Router 7, built with Vite 8; fonts bundled with the app |
+| Backend | Node.js 22 with Express 4.19.2 |
+| Database | SQLite via better-sqlite3 |
+| Authentication | GitHub OAuth, then an application JWT issued by Express |
+| Session | JWT in a Secure, HttpOnly cookie named `token` |
+| Hosting | Azure App Service |
+
+## Project structure
+
+```
+ai-capsule/
+├── package.json              root build/start scripts used by Azure
+├── client/                   React frontend (Vite)
+│   ├── vite.config.js        dev proxy for /api and /auth
+│   └── src/
+│       ├── api.js            every request to Express goes through here
+│       ├── App.jsx           routes: /, /login, /dashboard
+│       ├── styles.css        the whole visual design
+│       ├── components/       Brand (logo and name)
+│       └── pages/            Home, Login, Dashboard
+└── server/                   Express backend
+    ├── .env.example          environment variable names (no values)
+    ├── scripts/verify.js     automated security and CRUD checks
+    └── src/
+        ├── index.js          app setup, serves the React build
+        ├── db.js             SQLite connection and schema
+        ├── auth.js           JWT signing, cookie, requireAuth middleware
+        └── routes/
+            ├── auth.routes.js      GitHub OAuth login, callback, logout
+            └── capsules.routes.js  the four protected CRUD routes
+```
+
+## Install and run locally
+
+Requires Node.js 22.
+
+```
+cd server
+npm install
+cp .env.example .env
+```
+
+Fill in `JWT_SECRET`, `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in
+`server/.env`. The GitHub OAuth app for local development needs the callback
+URL `http://localhost:5000/auth/github/callback`.
+
+```
+cd ../client
+npm install
+```
+
+Run the backend and frontend in two terminals:
+
+```
+cd server && npm run dev      # Express on http://localhost:5000
+cd client && npm run dev      # Vite on http://localhost:5173
+```
+
+Open http://localhost:5173.
+
+To run the production build locally, the same way Azure runs it:
+
+```
+npm run build                 # from the project root
+npm start                     # serves React and the API on port 5000
+```
+
+With the production build, set `CLIENT_URL=http://localhost:5000` in
+`server/.env` so the login redirect returns to port 5000.
+
+To run the automated checks:
+
+```
+cd server
+npm run verify
+```
+
+This starts a separate copy of the server on port 5055 with a throwaway
+database and a test-only secret, and checks every behaviour listed under
+"Verification" below. It does not touch your real data.
+
+## Routes
+
+| Route | Access | Purpose |
+| --- | --- | --- |
+| `/` | Public | Landing page explaining AI Capsule |
+| `/login` | Public | Starts GitHub OAuth |
+| `/dashboard` | Protected | The signed-in user's records, with create, edit, delete and search |
+| `GET /api/health` | Public | Returns `{ "status": "ok" }` |
+| `GET /api/capsules` | JWT required | Read the signed-in user's records |
+| `POST /api/capsules` | JWT required | Create a record owned by the signed-in user |
+| `PUT /api/capsules/:id` | JWT required | Update one of the signed-in user's records |
+| `DELETE /api/capsules/:id` | JWT required | Delete one of the signed-in user's records |
+| `GET /auth/github` | Public | Redirects to GitHub to sign in |
+| `GET /auth/github/callback` | Public | Completes OAuth and issues the application JWT |
+| `POST /auth/logout` | Public | Clears the `token` cookie |
+| `GET /api/me` | JWT required | Returns the identity from the verified JWT |
+
+## How the React frontend communicates with Express
+
+Every request goes through one helper in `client/src/api.js`, which calls
+relative paths such as `/api/capsules` with `credentials: 'include'`.
+
+In development, Vite runs on port 5173 and its proxy
+(`client/vite.config.js`) forwards `/api` and `/auth` to Express on port 5000.
+In production, Express serves the compiled React build from `client/dist` and
+the API from the same process and the same public URL.
+
+In both cases the browser sees one origin, so the `token` cookie is a
+first-party cookie and is sent automatically. No CORS configuration is needed.
+
+## OAuth, JWT and route protection
+
+GitHub OAuth is the provider.
+
+1. `GET /auth/github` generates a random `state` value, stores it in a
+   ten-minute HttpOnly cookie, and redirects to GitHub. The `state` check
+   protects the callback against cross-site request forgery.
+2. After the user approves, GitHub redirects to `/auth/github/callback` with a
+   one-time code. Express checks that `state` matches, then exchanges the code
+   for a GitHub access token server-to-server, so the client secret never
+   reaches the browser.
+3. Express calls the GitHub API once to read the user's id and login. The
+   GitHub access token is then discarded — it is never stored and never sent
+   to the browser.
+4. Express signs its own application JWT with `JWT_SECRET`
+   (`signAppToken` in `server/src/auth.js`). The GitHub user id is stored as
+   the `sub` claim and the token expires after two hours.
+5. The JWT is stored in a cookie named `token` with `httpOnly: true`,
+   `sameSite: 'lax'`, and `secure: true` when `NODE_ENV=production`. It is not
+   placed in localStorage and is not sent as an Authorization header.
+
+`requireAuth` in `server/src/auth.js` protects every capsule route. It reads
+the `token` cookie and calls `jwt.verify` with `JWT_SECRET`. A missing cookie,
+an invalid signature, a malformed value or an expired token all return
+`401 Unauthorized` with no capsule data. On success it sets `req.user` from
+the verified token.
+
+`requireAuth` is attached individually to each of the four routes in
+`server/src/routes/capsules.routes.js`, so the protection is visible on every
+route definition.
+
+`app.set('trust proxy', 1)` is set because Azure terminates HTTPS at its load
+balancer and forwards plain HTTP to the Node process.
+
+## User ownership
+
+The owner of every record is taken from the verified JWT (`req.user.id`),
+never from the request body. A `user_id` sent by the browser is ignored.
+
+- CREATE stores `req.user.id` as `user_id`.
+- READ uses `WHERE user_id = ?`.
+- UPDATE and DELETE use `WHERE id = ? AND user_id = ?`. If a user targets a
+  record they do not own, the query matches no rows and the route returns 404,
+  so the record is neither changed nor revealed.
+
+All queries use `?` parameter placeholders, so request data cannot be
+executed as SQL.
+
+## Environment variables
+
+Values are stored in Azure App Service → Environment variables and, locally,
+in `server/.env`, which is gitignored. `server/.env.example` lists the names.
+No secret values are committed.
+
+| Name | Purpose |
+| --- | --- |
+| `PORT` | Port to listen on. Set automatically by Azure; `5000` locally |
+| `NODE_ENV` | `production` on Azure, which turns on the Secure cookie flag |
+| `JWT_SECRET` | Signs and verifies the application JWT |
+| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
+| `APP_BASE_URL` | Public base URL, used to build the OAuth callback URL |
+| `CLIENT_URL` | Where to send the user after login |
+| `DB_PATH` | Location of the SQLite file |
+| `SCM_DO_BUILD_DURING_DEPLOYMENT` | Azure only: `true`, so Azure installs dependencies |
+
+Development and production use separate GitHub OAuth apps, because each
+OAuth app accepts a single callback URL.
+
+## Database and storage
+
+`server/src/db.js` opens the SQLite file at `DB_PATH` and creates the
+`capsules` table on startup with `CREATE TABLE IF NOT EXISTS`, so no manual
+setup or migration step is needed. It creates the folder first, because SQLite
+will not create a missing directory. The schema follows the assignment brief,
+with an index on `user_id`.
+
+User ownership is stored in the `user_id` column as the GitHub user id taken
+from the verified JWT.
+
+On Azure, `DB_PATH` is `/home/data/capsules.db`. Azure App Service mounts
+`/home` on persistent storage, so records survive app restarts and
+redeployments. Storage is persistent, not ephemeral.
+
+## Deployment
+
+1. Azure App Service web app created on Linux with Node 22 LTS, Free F1 plan.
+2. Environment variables above added under Settings → Environment variables.
+3. A production GitHub OAuth app registered with the callback URL
+   `https://YOUR-APP-NAME.azurewebsites.net/auth/github/callback`.
+4. Deployment Center connected to the GitHub repository `main` branch with
+   GitHub Actions as the build provider.
+
+The root `package.json` defines the build and start commands. `npm run build`
+installs and builds the React client, then installs the server's
+dependencies. `npm start` runs `node server/src/index.js`.
+
+## Required cURL tests
+
+Run against the deployed application.
+
+**Test 1 — no authentication**
+
+```
+curl -i https://YOUR-APP-NAME.azurewebsites.net/api/capsules
+```
+
+Result: status `401 Unauthorized`, body `{"error":"Unauthorized"}`.
+
+**Test 2 — fake JWT**
+
+```
+curl -i -H "Cookie: token=fake-token-123" https://YOUR-APP-NAME.azurewebsites.net/api/capsules
+```
+
+Result: status `401 Unauthorized`, body `{"error":"Unauthorized"}`.
+
+Test 1 shows that the capsule API requires authentication. Test 2 shows that
+the server verifies the JWT signature, rather than only checking that a
+`token` cookie is present.
+
+## Limitation
+
+The application JWT expires after two hours and there is no refresh token.
+A user who leaves the dashboard open longer than that is sent back to the
+login page on their next action and has to sign in with GitHub again, and
+any unsaved text in the form is lost.
+
+## AI-assisted development
+
+**AI tool used.** Claude (Anthropic) was used throughout: to plan the
+architecture, generate the Express routes, SQLite queries, OAuth and JWT code,
+React components and CSS, write the deployment configuration and the
+`verify.js` test script, and help debug.
+
+**Problem found and corrected in AI-generated configuration.** The generated
+root build script installed the client with a plain `npm install`. Azure sets
+`NODE_ENV=production`, and when that is set npm skips devDependencies — and
+Vite, which performs the React build, is a devDependency. The deployed build
+would have failed with `vite: not found`. Running the client install with
+`NODE_ENV=production` locally reproduced the failure exactly. Changing the
+script to `npm --prefix client install --include=dev` fixed it, and the same
+test then built successfully.
+
+A second, smaller correction: the generated `package.json` listed older
+versions of `better-sqlite3` and `dotenv` than npm actually installs. After a
+real install and test run, the version ranges were updated to match the tested
+versions (`better-sqlite3` 13.x, `dotenv` 18.x).
+
+**How OAuth login, JWT verification and protected API behaviour were
+verified.**
+- Signed in through GitHub on the deployed site and reached the dashboard.
+- Checked in the browser developer tools that the `token` cookie is marked
+  HttpOnly and Secure.
+- Ran both required cURL tests against the deployed URL; both returned 401.
+- `npm run verify` also confirms that an expired token, a token signed with a
+  different secret, and an unsigned `alg: none` token are all rejected with
+  401, that POST, PUT and DELETE reject unauthenticated requests, that
+  `/auth/github` redirects to GitHub with an HttpOnly state cookie, and that
+  the callback rejects a forged `state` value.
+
+**How CRUD behaviour and user data ownership were verified.**
+- Created, read, updated and deleted records in the deployed application,
+  reloading after each change to confirm it was saved.
+- `npm run verify` signs requests as two different users and confirms that
+  each user sees only their own records, that the second user's PUT and DELETE
+  on the first user's record return 404 and leave it unchanged, and that a
+  `user_id` supplied in the request body is ignored in favour of the JWT
+  identity.
+
+**An implementation decision I can explain.** I served the React build and
+the Express API from a single App Service app on one public URL, instead of
+hosting the frontend separately. The assignment requires the JWT in an
+HttpOnly cookie, which JavaScript cannot read, so the browser has to send it
+automatically — and browsers only do that reliably for first-party requests.
+With one origin the cookie is first-party both locally (through the Vite
+proxy) and in production, so I avoided `SameSite=None`, CORS credential
+settings and third-party cookie blocking. The trade-off is that the frontend
+cannot be scaled or cached on a CDN independently of the API, which does not
+matter at this size.

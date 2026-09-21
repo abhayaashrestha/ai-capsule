@@ -1,0 +1,11 @@
+{
+  "name": "ai-capsule",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI Capsule - cloud-deployed AI prompt manager (CSE3CWA/CSE5006 Assignment 3)",
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "build": "npm --prefix client install --include=dev && npm --prefix client run build && npm --prefix server install",
+    "start": "node server/src/index.js"
+  }
+}
