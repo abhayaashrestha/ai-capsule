@@ -9,13 +9,13 @@ screenshot URL.
 
 | | |
 | --- | --- |
-| Public URL | https://YOUR-APP-NAME.azurewebsites.net |
-| Health check | https://YOUR-APP-NAME.azurewebsites.net/api/health |
-| Cloud platform | Microsoft Azure App Service — Linux, Node 22 LTS, Free F1 plan |
-| Deployment | GitHub Actions via Azure Deployment Center, on every push to `main` |
+| Public URL | https://ai-capsule-22640875abhaya.onrender.com |
+| Health check | https://ai-capsule-22640875abhaya.onrender.com/api/health |
+| Cloud platform | Render — free web service, Node 22 |
+| Deployment | Render builds and deploys automatically on every push to `main` |
 
-The free plan sleeps when idle, so the first request after a pause can take
-up to about 30 seconds.
+The free plan sleeps after about 15 minutes without traffic, so the first
+request after a pause can take up to a minute while it starts again.
 
 ## Technology
 
@@ -26,13 +26,13 @@ up to about 30 seconds.
 | Database | SQLite via better-sqlite3 |
 | Authentication | GitHub OAuth, then an application JWT issued by Express |
 | Session | JWT in a Secure, HttpOnly cookie named `token` |
-| Hosting | Azure App Service |
+| Hosting | Render (free web service) |
 
 ## Project structure
 
 ```
 ai-capsule/
-├── package.json              root build/start scripts used by Azure
+├── package.json              root build/start scripts used by Render
 ├── client/                   React frontend (Vite)
 │   ├── vite.config.js        dev proxy for /api and /auth
 │   └── src/
@@ -81,7 +81,7 @@ cd client && npm run dev      # Vite on http://localhost:5173
 
 Open http://localhost:5173.
 
-To run the production build locally, the same way Azure runs it:
+To run the production build locally, the same way Render runs it:
 
 ```
 npm run build                 # from the project root
@@ -163,8 +163,8 @@ the verified token.
 `server/src/routes/capsules.routes.js`, so the protection is visible on every
 route definition.
 
-`app.set('trust proxy', 1)` is set because Azure terminates HTTPS at its load
-balancer and forwards plain HTTP to the Node process.
+`app.set('trust proxy', 1)` is set because Render terminates HTTPS at its
+proxy and forwards plain HTTP to the Node process.
 
 ## User ownership
 
@@ -182,21 +182,20 @@ executed as SQL.
 
 ## Environment variables
 
-Values are stored in Azure App Service → Environment variables and, locally,
+Values are stored in Render → Environment for the deployed app and, locally,
 in `server/.env`, which is gitignored. `server/.env.example` lists the names.
 No secret values are committed.
 
 | Name | Purpose |
 | --- | --- |
-| `PORT` | Port to listen on. Set automatically by Azure; `5000` locally |
-| `NODE_ENV` | `production` on Azure, which turns on the Secure cookie flag |
+| `PORT` | Port to listen on. Set automatically by Render; `5000` locally |
+| `NODE_ENV` | `production` on Render, which turns on the Secure cookie flag |
 | `JWT_SECRET` | Signs and verifies the application JWT |
 | `GITHUB_CLIENT_ID` | GitHub OAuth app client ID |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
 | `APP_BASE_URL` | Public base URL, used to build the OAuth callback URL |
 | `CLIENT_URL` | Where to send the user after login |
 | `DB_PATH` | Location of the SQLite file |
-| `SCM_DO_BUILD_DURING_DEPLOYMENT` | Azure only: `true`, so Azure installs dependencies |
 
 Development and production use separate GitHub OAuth apps, because each
 OAuth app accepts a single callback URL.
@@ -212,42 +211,76 @@ with an index on `user_id`.
 User ownership is stored in the `user_id` column as the GitHub user id taken
 from the verified JWT.
 
-On Azure, `DB_PATH` is `/home/data/capsules.db`. Azure App Service mounts
-`/home` on persistent storage, so records survive app restarts and
-redeployments. Storage is persistent, not ephemeral.
+On Render, `DB_PATH` is `./data/capsules.db`. **Deployed storage is
+ephemeral.** Render's free web services have a temporary filesystem, so the
+SQLite file is wiped whenever the service restarts: on every redeploy, and
+when the free plan wakes up after sleeping. Records persist while the service
+is running, which is enough to demonstrate full CRUD, but they do not survive
+a restart. Moving to Render PostgreSQL, or a paid instance with a persistent
+disk, would make storage permanent; the ownership rules and queries would stay
+the same.
 
 ## Deployment
 
-1. Azure App Service web app created on Linux with Node 22 LTS, Free F1 plan.
-2. Environment variables above added under Settings → Environment variables.
-3. A production GitHub OAuth app registered with the callback URL
-   `https://YOUR-APP-NAME.azurewebsites.net/auth/github/callback`.
-4. Deployment Center connected to the GitHub repository `main` branch with
-   GitHub Actions as the build provider.
+1. A Render web service created from the GitHub repository, branch `main`,
+   on the free instance type. Render reads the Node version (22.x) from the
+   root `package.json`.
+2. Build command `npm run build`; start command `npm start`.
+3. Environment variables above added under Environment. `PORT` is not set,
+   because Render provides it.
+4. A production GitHub OAuth app registered with the callback URL
+   `https://ai-capsule-22640875abhaya.onrender.com/auth/github/callback`.
 
-The root `package.json` defines the build and start commands. `npm run build`
-installs and builds the React client, then installs the server's
-dependencies. `npm start` runs `node server/src/index.js`.
+The root `package.json` defines both commands. `npm run build` installs and
+builds the React client, then installs the server's dependencies. `npm start`
+runs `node server/src/index.js`, which serves the React build and the API from
+the same public URL.
 
 ## Required cURL tests
 
-Run against the deployed application.
+Run against the deployed application on 22 September 2026.
 
 **Test 1 — no authentication**
 
 ```
-curl -i https://YOUR-APP-NAME.azurewebsites.net/api/capsules
+curl -i https://ai-capsule-22640875abhaya.onrender.com/api/capsules
 ```
 
-Result: status `401 Unauthorized`, body `{"error":"Unauthorized"}`.
+Result:
+
+```
+HTTP/2 401
+content-type: application/json; charset=utf-8
+x-powered-by: Express
+x-render-origin-server: Render
+
+{"error":"Unauthorized"}
+```
 
 **Test 2 — fake JWT**
 
 ```
-curl -i -H "Cookie: token=fake-token-123" https://YOUR-APP-NAME.azurewebsites.net/api/capsules
+curl -i -H "Cookie: token=fake-token-123" https://ai-capsule-22640875abhaya.onrender.com/api/capsules
 ```
 
-Result: status `401 Unauthorized`, body `{"error":"Unauthorized"}`.
+Result:
+
+```
+HTTP/2 401
+content-type: application/json; charset=utf-8
+x-powered-by: Express
+x-render-origin-server: Render
+
+{"error":"Unauthorized"}
+```
+
+**Health check**
+
+```
+curl -i https://ai-capsule-22640875abhaya.onrender.com/api/health
+```
+
+Result: `HTTP/2 200` with body `{"status":"ok"}`.
 
 Test 1 shows that the capsule API requires authentication. Test 2 shows that
 the server verifies the JWT signature, rather than only checking that a
@@ -255,10 +288,12 @@ the server verifies the JWT signature, rather than only checking that a
 
 ## Limitation
 
-The application JWT expires after two hours and there is no refresh token.
-A user who leaves the dashboard open longer than that is sent back to the
-login page on their next action and has to sign in with GitHub again, and
-any unsaved text in the form is lost.
+Deployed data is not permanent. Because the free Render service uses a
+temporary filesystem, every capsule is lost when the service restarts — after a
+redeploy, or when it wakes from sleeping after about 15 minutes idle. A user
+who saves prompts and returns the next day will find an empty dashboard.
+The fix would be a hosted database such as Render PostgreSQL in place of the
+SQLite file.
 
 ## AI-assisted development
 
@@ -268,15 +303,23 @@ React components and CSS, write the deployment configuration and the
 `verify.js` test script, and help debug.
 
 **Problem found and corrected in AI-generated configuration.** The generated
-root build script installed the client with a plain `npm install`. Azure sets
-`NODE_ENV=production`, and when that is set npm skips devDependencies — and
-Vite, which performs the React build, is a devDependency. The deployed build
-would have failed with `vite: not found`. Running the client install with
+root build script installed the client with a plain `npm install`. The
+deployment sets `NODE_ENV=production`, and the host makes environment
+variables available during the build; when that variable is set, npm skips
+devDependencies — and Vite, which performs the React build, is a
+devDependency. The deployed build would have failed with `vite: not found`. Running the client install with
 `NODE_ENV=production` locally reproduced the failure exactly. Changing the
 script to `npm --prefix client install --include=dev` fixed it, and the same
 test then built successfully.
 
-A second, smaller correction: the generated `package.json` listed older
+**A problem I hit myself.** The generated configuration runs the backend on
+port 5000. On my Mac the server crashed on startup with
+`EADDRINUSE: address already in use :::5000`. Running `lsof -i :5000` showed
+the port was held by macOS's AirPlay Receiver, which listens on 5000. Turning
+off AirPlay Receiver in System Settings freed the port without changing any
+code or the GitHub callback URL.
+
+A further, smaller correction: the generated `package.json` listed older
 versions of `better-sqlite3` and `dotenv` than npm actually installs. After a
 real install and test run, the version ranges were updated to match the tested
 versions (`better-sqlite3` 13.x, `dotenv` 18.x).
@@ -284,8 +327,9 @@ versions (`better-sqlite3` 13.x, `dotenv` 18.x).
 **How OAuth login, JWT verification and protected API behaviour were
 verified.**
 - Signed in through GitHub on the deployed site and reached the dashboard.
-- Checked in the browser developer tools that the `token` cookie is marked
-  HttpOnly and Secure.
+- Checked in Safari's Web Inspector that the `token` cookie is HttpOnly with
+  SameSite Lax. Locally Secure is off, as intended for plain HTTP; in
+  production the cookie is issued with Secure because `NODE_ENV=production`.
 - Ran both required cURL tests against the deployed URL; both returned 401.
 - `npm run verify` also confirms that an expired token, a token signed with a
   different secret, and an unsigned `alg: none` token are all rejected with
@@ -303,7 +347,7 @@ verified.**
   identity.
 
 **An implementation decision I can explain.** I served the React build and
-the Express API from a single App Service app on one public URL, instead of
+the Express API from a single Render web service on one public URL, instead of
 hosting the frontend separately. The assignment requires the JWT in an
 HttpOnly cookie, which JavaScript cannot read, so the browser has to send it
 automatically — and browsers only do that reliably for first-party requests.
